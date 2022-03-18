@@ -9,5 +9,4 @@ edition = "2021"
 nrf9160-pac = "0.11.0"
 cortex-m = "0.7"
 cortex-m-rt = "0.7"
-panic-reset = "0.1"
 nrf9160-boot = { path = "../" }

@@ -11,3 +11,4 @@ members = ["simple-boot"]
 [dependencies]
 nrf9160-pac = "0.11.0"
 cortex-m = "0.7"
+bitflags = "1.3"

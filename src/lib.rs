@@ -1,5 +1,6 @@
 #![no_std]
 
+use layout::RAM_START_ADDRESS;
 use nrf9160_pac::{Peripherals, SPU_S};
 
 pub use layout::{FlashLayout, RamLayout, Section};
@@ -7,97 +8,29 @@ pub use layout::{FlashLayout, RamLayout, Section};
 pub mod error;
 pub mod layout;
 
-const FLASH_REGION_SIZE: usize = 0x8_000; // 32 KiB;
-const RAM_REGION_SIZE: usize = 0x2_000; // 8 KiB;
-const RAM_START_ADDRESS: usize = 0x20_000_000;
+const FLASH_REGION_SIZE: usize = 0x8000; // 32 KiB;
+const RAM_REGION_SIZE: usize = 0x2000; // 8 KiB;
 
 pub fn config_flash(spu: &SPU_S, layout: &FlashLayout) {
-    let bootloader_sections = layout.bootloader.size / FLASH_REGION_SIZE;
-    for n in 0..bootloader_sections {
-        spu.flashregion[n].perm.write(|w| {
-            w.read()
-                .enable()
-                .write()
-                .enable()
-                .secattr()
-                .secure()
-                .execute()
-                .enable()
-                .lock()
-                .locked()
-        });
-    }
-
-    let app_section_start = layout.application.address / FLASH_REGION_SIZE;
-    let app_section_end = (layout.application.size / FLASH_REGION_SIZE) + app_section_start;
-    for n in app_section_start..app_section_end {
-        spu.flashregion[n].perm.write(|w| {
-            w.read()
-                .enable()
-                .write()
-                .enable()
-                .secattr()
-                .non_secure()
-                .execute()
-                .enable()
-                .lock()
-                .locked()
-        });
+    for section in layout.sections {
+        let start_region = section.address / FLASH_REGION_SIZE;
+        let end_region = (section.size / FLASH_REGION_SIZE) + start_region;
+        for n in start_region..end_region {
+            spu.flashregion[n]
+                .perm
+                .write(|w| unsafe { w.bits(section.permissions.bits()).lock().locked() })
+        }
     }
 }
 
 pub fn config_ram(spu: &SPU_S, layout: &RamLayout) {
-    let boot_section_start = (layout.bootloader.address - RAM_START_ADDRESS) / RAM_REGION_SIZE;
-    let boot_section_end = (layout.bootloader.size / RAM_REGION_SIZE) + boot_section_start;
-    for n in boot_section_start..boot_section_end {
-        spu.ramregion[n].perm.write(|w| {
-            w.read()
-                .enable()
-                .write()
-                .enable()
-                .secattr()
-                .secure()
-                .execute()
-                .enable()
-                .lock()
-                .locked()
-        });
-    }
-
-    let app_section_start = (layout.application.address - RAM_START_ADDRESS) / RAM_REGION_SIZE;
-    let app_section_end = (layout.application.size / RAM_REGION_SIZE) + app_section_start;
-    for n in app_section_start..app_section_end {
-        spu.flashregion[n].perm.write(|w| {
-            w.read()
-                .enable()
-                .write()
-                .enable()
-                .secattr()
-                .non_secure()
-                .execute()
-                .enable()
-                .lock()
-                .locked()
-        });
-    }
-
-    if let Some(ref modem_shared) = layout.modem_shared {
-        let modem_section_start = (modem_shared.address - RAM_START_ADDRESS) / RAM_REGION_SIZE;
-        let modem_section_end = (modem_shared.size / RAM_REGION_SIZE) + modem_section_start;
-
-        for n in modem_section_start..modem_section_end {
-            spu.flashregion[n].perm.write(|w| {
-                w.read()
-                    .enable()
-                    .write()
-                    .enable()
-                    .secattr()
-                    .non_secure()
-                    .execute()
-                    .enable()
-                    .lock()
-                    .locked()
-            });
+    for section in layout.sections {
+        let start_region = (section.address - RAM_START_ADDRESS) / RAM_REGION_SIZE;
+        let end_region = (section.size / RAM_REGION_SIZE) + start_region;
+        for n in start_region..end_region {
+            spu.flashregion[n]
+                .perm
+                .write(|w| unsafe { w.bits(section.permissions.bits()).lock().locked() })
         }
     }
 }
@@ -177,23 +110,23 @@ pub fn config_peripherals(p: Peripherals) {
     });
 }
 
-union Vector {
-    pub handler: unsafe extern "C" fn(),
-    pub reserved: usize,
-}
-
-pub unsafe fn jump(layout: &FlashLayout) -> ! {
+/// Jump into non-secure application code.
+///
+/// # Safety
+///
+/// This function requires you pass an address pointing to the start of the application vector
+/// table. Application ram must also have been configured as read, write, execute, and non-secure earlier
+/// in the bootloader
+pub unsafe fn jump(app_base: u32) -> ! {
     let scb = &*nrf9160_pac::SCB::ptr();
-    scb.vtor.write(layout.application.address as u32);
+    scb.vtor.write(app_base);
 
-    let vector_table = layout.application.address as *const Vector;
-    let msp = (*vector_table.offset(0)).handler as *const u32;
+    let vector_table = app_base as *const u32;
+    let msp = *vector_table.offset(0) as *const u32;
     let rsv = vector_table.offset(1);
 
-    let ns_rsv = Vector {
-        reserved: (((*rsv).handler as usize) & !1) as usize,
-    };
+    let ns_rsv = (*rsv) & !1;
     cortex_m::asm::dsb();
     cortex_m::asm::isb();
-    cortex_m::asm::bootstrap(msp, ns_rsv.handler as *const u32);
+    cortex_m::asm::bootstrap(msp, ns_rsv as *const u32);
 }

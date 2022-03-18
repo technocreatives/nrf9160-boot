@@ -1,12 +1,5 @@
 #[derive(Debug, Clone, Copy)]
-pub enum FlashLayoutError {
-    InvalidBootloaderStart,
+pub enum LayoutError {
     SectionsOverlap,
-    TooLarge,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum RamLayoutError {
-    SectionsOverlap,
-    TooLarge,
+    InvalidAddress,
 }
